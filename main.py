@@ -1,48 +1,14 @@
+import os
+import os.path
+from os.path import isdir
 
-#
-# class OptionMock:
-#     def __init__(self, name, title, value, constraint):
-#         self.name = name
-#         self.title = title
-#         self.value = value
-#         self.constraint = constraint
-#
-# class DeviceMock:
-#
-#     def __init__(self, name):
-#         self.options = {'a': OptionMock("a", "option a", 5, None),
-#                         'b': OptionMock("b", "option b", 'b', ['a', 'b', 'c']),
-#                         'c': OptionMock("c", "option c", 50, (0, 100)),
-#                         'd': OptionMock("d", "option d", 200, [100, 200, 300])}
-#
-#         self.name = name
-#
-#     def __str__(self):
-#         return self.name
-#
-#
-# #import pyinsane2
-# class Pyinsane2Mock:
-#     def __init__(self):
-#         self.PyinsaneException = Exception()
-#
-#     def init(self):
-#         pass
-#
-#     def get_devices(self):
-#         return [DeviceMock("dev a"),
-#                 DeviceMock("dev b"),
-#                 DeviceMock("dev c"),
-#                 DeviceMock("dev d")]
+if "TEST" in os.environ:
+    import mock
+    pyinsane2 = mock
+else:
+    import pyinsane2
 
-#pyinsane2 = Pyinsane2Mock()
-
-import pyinsane2
-
-from os.path import expanduser
-home = expanduser("~")
-
-pyinsane2.init()
+home = os.getcwd()
 
 
 def selectDevice(devices):
@@ -71,7 +37,10 @@ def selectOptions(opts):
         try:
             value = str(opt.value)
         except pyinsane2.PyinsaneException as exc:
-            value = ""
+            if(opt.constraint is not None):
+                value = opt.constraint[0]
+            else:
+                value = ""
 
         while True:
             _input = input("{} - ({}) ".format(str(opt.constraint), value))
@@ -79,6 +48,8 @@ def selectOptions(opts):
                 _input = value
                 break
             elif isinstance(opt.constraint, list):
+                valueType = type(opt.constraint[0])
+                _input = valueType(_input)
                 if _input in opt.constraint:
                     break
                 else:
@@ -102,37 +73,71 @@ def selectOptions(opts):
 
 
 def selectFilePath():
-    _input = input("Please input save path ({}) ".format(home))
-    if(input == ""):
-        return home
-    else:
-        return _input
+    while True:
+        _input = input("Please input save path ({}) ".format(home))
+        if not _input:
+            _input = home
+
+        if not isdir(_input):
+            print(_input, "is not valid directory path")
+        else:
+            break
+
+    return _input
 
 
 def selectNameRoot():
     _input = input("Please select name root ({}) ".format("scan"))
-    if(_input == ""):
+    if not _input:
         return "scan"
     else:
         return _input
 
 
 def applyOptions(device, options):
-    pass
+    for name, value in options.items():
+        if name is not None:
+            if len(value) == 2 and value[0] != value[1]:
+                try:
+                    pyinsane2.set_scanner_opt(device, name, value)
+                except:
+                    print("setting option failed!")
+
 
 def scan(device):
     print("scanning with device", str(device))
+    scan_session = device.scan(multiple=False)
+    try:
+        while True:
+            scan_session.scan.read()
+    except EOFError:
+        pass
+
+    image = scan_session.images[-1]
+    return image
 
 
-def saveImage(image, fileName, path):
-    print("Saving", image, "to: ", path, fileName)
-
+def saveImage(image, filename, path):
+    print('saving: ', image, 'to', os.path.join(path, filename))
+    try:
+        with open(os.path.join(path, filename), mode='xb') as f:
+            image.save(f, format="TIFF")
+    except FileExistsError as err:
+        print("file already exists")
 
 
 def main():
     device = selectDevice(pyinsane2.get_devices())
+    pyinsane2.maximize_scan_area(device)
     options = selectOptions(device.options.values())
     applyOptions(device=device, options=options)
+
+    print("will scan with following options:")
+    for opt in device.options.values():
+        try:
+            print(opt.name, opt.value)
+        except pyinsane2.PyinsaneException as exc:
+            pass
 
     filePath = selectFilePath()
     nameRoot = selectNameRoot()
@@ -142,23 +147,25 @@ def main():
     while True:
         _input = input("(<enter> or <q+enter>) ")
 
-        if(_input == ""):
+        if not _input:
             fileNumber = str(scan_count)
             fileNumber = "".join(['0'*(5-len(fileNumber)), fileNumber])
             fileName = "".join([nameRoot, fileNumber, ".tif"])
             print("Scanning ", fileName)
             image = scan(device)
             print("Done. Saving", fileName)
-            saveImage(image, fileNumber, filePath)
+            saveImage(image, fileName, filePath)
             scan_count = scan_count + 1
-
             continue
 
-        if(_input == "q"):
+        if _input == "q":
             print("Exiting")
             break
 
 
-
 if __name__ == "__main__":
-    main()
+    pyinsane2.init()
+    try:
+        main()
+    finally:
+        pyinsane2.exit()
